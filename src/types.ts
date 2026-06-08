@@ -60,12 +60,44 @@ export interface Verdict {
 export interface Judge {
   name: string;
   configured(ctx: Ctx): true | string;
+  /** Absolute, per-candidate verdict (sequential / first-pass path). */
   evaluate(candidate: Candidate, req: ImageRequest, ctx: Ctx): Promise<Verdict>;
+  /**
+   * Optional COMPARATIVE selector: given a *pool* of candidates gathered in
+   * parallel, pick the single best one and say why. This is the relative
+   * ("which of these is best?") evaluation — one look at the whole set instead
+   * of N independent yes/no calls. When absent, the engine falls back to
+   * evaluating each candidate and taking the highest score. Return index -1 if
+   * none are acceptable.
+   */
+  select?(
+    candidates: Candidate[],
+    req: ImageRequest,
+    ctx: Ctx,
+  ): Promise<{ index: number; verdict: Verdict }>;
 }
 
 export interface PipelineEntry {
   provider: string;
   [option: string]: any;
+}
+
+/**
+ * A parallel stage: gather candidates from these providers CONCURRENTLY, pool
+ * them, and judge them comparatively (best-of-pool) rather than first-pass. This
+ * is the "fan out, then pick the best" configuration — an alternative to the
+ * pure sequential cascade, usable for one stage while other stages stay
+ * sequential.
+ */
+export interface ParallelStage {
+  parallel: PipelineEntry[];
+  [option: string]: any;
+}
+
+export type PipelineStage = PipelineEntry | ParallelStage;
+
+export function isParallel(s: PipelineStage): s is ParallelStage {
+  return Array.isArray((s as ParallelStage).parallel);
 }
 export interface JudgeConfig {
   provider: string;
@@ -73,14 +105,21 @@ export interface JudgeConfig {
 }
 export interface Config {
   judge: JudgeConfig;
-  /** Ranked list — tried in order. */
-  pipeline: PipelineEntry[];
+  /**
+   * Ranked list of STAGES, tried in order. A stage is either one provider
+   * (sequential) or a `{ parallel: [...] }` group (gathered concurrently and
+   * judged comparatively). Plain `{ provider }` entries keep the classic
+   * sequential cascade; wrap some in `parallel` to fan out at that stage.
+   */
+  pipeline: PipelineStage[];
   /**
    * "first-pass" (default): stop at the first candidate that passes — cheapest.
    * "best": judge every candidate from every provider and return the highest
    * scorer — more thorough (and more API calls), fixes "the 1st result was bad".
+   * "pool": gather the ENTIRE pipeline in parallel into one pool and pick the
+   * best comparatively — maximum recall + relative evaluation in a single shot.
    */
-  mode?: "first-pass" | "best";
+  mode?: "first-pass" | "best" | "pool";
 }
 
 export interface Attempt {

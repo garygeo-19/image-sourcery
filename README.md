@@ -120,10 +120,53 @@ Judges: `openai` (vision), `human` (interactive), `none` (accept first).
 
 ### Modes
 
-- **first-pass** (default) — stop at the first candidate that passes. Cheapest.
+- **first-pass** (default) — sequential cascade: stop at the first candidate that
+  passes. Cheapest.
 - **best** (`--best` or `"mode": "best"`) — judge *every* candidate from every
   provider and keep the highest scorer. More thorough (and more API calls); fixes
   "the first result was bad."
+- **pool** (`--parallel` or `"mode": "pool"`) — **fan out**: gather the whole
+  pipeline *at once, in parallel*, into one candidate pool, then judge them
+  **comparatively** ("which of these is best?") in a single look. Maximum recall +
+  relative evaluation. This is the parallel alternative to the sequential cascade.
+
+### Parallel stages
+
+A pipeline stage can be a `{ parallel: [...] }` group — those providers are
+gathered concurrently and judged comparatively, while the rest of the pipeline
+stays a sequential cascade. Fan out only where you need to:
+
+```jsonc
+"pipeline": [
+  { "provider": "wikimedia" },                 // try the precise source first
+  { "parallel": [                              // …then fan out and pick the best
+      { "provider": "openverse" },
+      { "provider": "unsplash", "apiKeyEnv": "UNSPLASH_ACCESS_KEY" },
+      { "provider": "pexels", "apiKeyEnv": "PEXELS_API_KEY" }
+  ]},
+  { "provider": "generate", "model": "gpt-image-1", "apiKeyEnv": "OPENAI_API_KEY" }
+]
+```
+
+### Comparative judging
+
+Parallel/pool stages use the judge's optional **`select`** — one relative look at
+the whole pool instead of N independent yes/no calls:
+- `openai` — a single vision call sees every candidate and returns the best index.
+- `human` — saves the pool and asks for the best index (interactive), or for an
+  **agent-in-the-loop**, use `imgsrcy gather`.
+
+### `gather` — fan out for external judging
+
+```bash
+imgsrcy gather "Golf Mk2 GTI, factory stock" --providers wikimedia,openverse,pexels --out ./pool
+```
+
+Fans out all providers in parallel, downloads **every** candidate to a dir + a
+`pool.json` manifest (provider, license, attribution, source), and exits. A human
+or an agent (Claude Code, Cursor) then views the pool and picks the best — the
+relative evaluation step, done outside the tool. The long-term path runs the same
+comparison as an automated `openai` `select` call.
 
 Every `--out` also writes a **provenance sidecar** (`<out>.json`): the source, license,
 attribution, query, judge score + reason, and the full decision trace.

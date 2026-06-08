@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { writeFileSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
-import { loadEnv } from "./util.js";
+import { loadEnv, download } from "./util.js";
 import { loadConfig } from "./config.js";
-import { run } from "./engine.js";
+import { run, gatherPool } from "./engine.js";
+import type { PipelineEntry } from "./types.js";
 import { REGISTRY, getProvider } from "./providers.js";
 import { JUDGES } from "./judges.js";
 import type { Config, Ctx } from "./types.js";
@@ -26,6 +27,7 @@ const HELP = `image-sourcery (imgsrcy) — ranked image sourcing, with a judge
 
 Usage:
   imgsrcy find "<subject>" [--out file] [options]
+  imgsrcy gather "<subject>" [--out dir] [options]   fan out, save the whole pool
   imgsrcy doctor [--config file]
   imgsrcy providers
 
@@ -34,7 +36,13 @@ Options for find:
   --providers a,b,c       override the ranked pipeline (e.g. wikimedia,inaturalist,generate)
   --judge none|openai|human   override the judge
   --best                  judge ALL candidates and keep the highest scorer
+  --parallel              gather the whole pipeline AT ONCE (pool) and pick the best
+                          comparatively — fan-out instead of sequential cascade
   --min <0..1>            minimum judge score to accept
+
+'gather' fans out all providers in parallel, downloads every candidate to a dir
+(default /tmp/imgsrcy/pool) + writes pool.json, and exits — for human/agent
+comparative judging (view the pool, pick the best). Same flags as find.
   --must-show "<text>"    positive constraint the judge must confirm
   --must-not "<text>"     negative constraint (must not be confused with)
   --count <n>             candidates considered per provider (default 5)
@@ -84,6 +92,7 @@ async function main() {
     if (flags.providers) config.pipeline = flags.providers.split(",").map((p) => ({ provider: p.trim() }));
     if (flags.judge) config.judge = { ...config.judge, provider: flags.judge };
     if (flags.best) config.mode = "best";
+    if (flags.parallel) config.mode = "pool";
 
     const req = {
       query,
@@ -116,6 +125,37 @@ async function main() {
     }
     console.log(JSON.stringify(provenance, null, 2));
     process.exit(result.ok ? 0 : 2);
+  }
+
+  if (cmd === "gather") {
+    const query = _[0];
+    if (!query) { console.error('gather needs a subject, e.g. imgsrcy gather "saguaro cactus"'); process.exit(1); }
+    const entries: PipelineEntry[] = flags.providers
+      ? flags.providers.split(",").map((p) => ({ provider: p.trim() }))
+      : config.pipeline.flatMap((s) => ("parallel" in s ? s.parallel : [s]));
+    const req = {
+      query,
+      mustShow: flags["must-show"],
+      mustNotConfuse: flags["must-not"],
+      count: flags.count ? Number(flags.count) : 5,
+    };
+    const pool = await gatherPool(req, entries, env, (m) => console.error(m));
+    const dir = flags.out ?? "/tmp/imgsrcy/pool";
+    mkdirSync(dir, { recursive: true });
+    const manifest: any[] = [];
+    for (let i = 0; i < pool.length; i++) {
+      const c = pool[i];
+      const base = { index: i, provider: c.provider, title: c.title, license: c.license, attribution: c.attribution, sourceUrl: c.sourceUrl, url: c.url };
+      try {
+        const d = c.bytes ? { bytes: c.bytes, mime: c.mime ?? "image/jpeg" } : await download(c.url!);
+        const file = path.join(dir, `${String(i).padStart(2, "0")}.${d.mime.includes("png") ? "png" : "jpg"}`);
+        writeFileSync(file, d.bytes);
+        manifest.push({ ...base, file });
+      } catch (e) { manifest.push({ ...base, error: String((e as Error).message) }); }
+    }
+    writeFileSync(path.join(dir, "pool.json"), JSON.stringify({ query, count: manifest.length, candidates: manifest }, null, 2));
+    console.log(JSON.stringify({ query, dir, count: manifest.length, candidates: manifest }, null, 2));
+    return;
   }
 
   console.error(`unknown command "${cmd}"\n`);
