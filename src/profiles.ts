@@ -82,6 +82,36 @@ export const BUILT_IN_PROFILES: Record<string, Profile> = {
   },
 
   /**
+   * The fallback for a NAMED subject whose archives came up empty.
+   *
+   * Not the same as `stock`. Plain `stock` does no identity checking, which is
+   * right for a described scene and wrong for a name that has fallen through:
+   * stock captions name things too. A card about the Stoa Poikile was given a
+   * photograph captioned "Stoa of Attalos, Athens" — a different building,
+   * captioned as such, and the judge accepted it as the subject.
+   *
+   * So the rule here is *loosely related is acceptable, wrong identity is not*.
+   * A generic colonnade names nothing and asserts nothing, so it goes through and
+   * the judge weighs it. A competing name does not. Requiring a positive name
+   * match instead would be the obvious rule and would be wrong — stock libraries
+   * do not caption ancient philosophers, so it kills the honest generics too.
+   */
+  "stock-safe": {
+    name: "stock-safe",
+    description: "Stock for a named subject: a generic image is fine, a different named one is not.",
+    stages: [
+      { gather: STOCK_SOURCES },
+      { filter: "no-other-name" },
+      { score: "judge" },
+      // A unique subject deserves a stricter bar: for a KIND any good example is
+      // correct, but for one particular thing a merely-similar image is a
+      // near-miss rather than an answer.
+      { filter: [{ filter: "min-score", whenUnique: 0.8 }] },
+      { select: "best" },
+    ],
+  },
+
+  /**
    * Generic scenes, materials and activities — drafting, a workbench, weather.
    * Deliberately has NO identity check, because there is no identity to check;
    * do not point this at a person's name.

@@ -123,6 +123,8 @@ export interface Scored {
   passes: boolean;
   reason: string;
   confusedWith?: string;
+  /** Carried through from the judge — see Verdict.subjectIsUnique. */
+  subjectIsUnique?: boolean;
 }
 
 export type FilterSpec = string | { filter: string; [option: string]: any };

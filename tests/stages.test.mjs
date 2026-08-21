@@ -254,3 +254,45 @@ test("no-other-name cannot convict a candidate that has no title", () => {
   assert.equal(rejectName("Empire State Building", undefined), null);
   assert.equal(rejectName("Empire State Building", ""), null);
 });
+
+// ── whenUnique ──────────────────────────────────────────────────────────────
+// The judge reports uniqueness; the caller decides what to do about it. For a
+// KIND of thing any good example is correct. For one particular thing, a
+// merely-similar image is a near-miss rather than an answer.
+const reject = (scored, options) =>
+  FILTERS["min-score"].reject({ provider: "fixture", ...scored }, {}, ctx, options);
+
+test("whenUnique applies a stricter floor only to unique subjects", () => {
+  const near = { score: 0.6, passes: true, reason: "" };
+
+  // No whenUnique set: the ordinary floor governs, unique or not.
+  assert.equal(reject({ ...near, subjectIsUnique: true }, { min: 0.5 }), null);
+
+  // A KIND clears the ordinary floor.
+  assert.equal(reject({ ...near, subjectIsUnique: false }, { min: 0.5, whenUnique: 0.8 }), null);
+
+  // The same score on a UNIQUE subject does not.
+  const why = reject({ ...near, subjectIsUnique: true }, { min: 0.5, whenUnique: 0.8 });
+  assert.match(why ?? "", /0\.8/);
+  assert.match(why ?? "", /subject is unique/);
+
+  // And a genuinely good image of the unique thing still passes.
+  assert.equal(reject({ score: 0.95, passes: true, reason: "", subjectIsUnique: true },
+    { min: 0.5, whenUnique: 0.8 }), null);
+});
+
+test("an unjudged candidate is unaffected by whenUnique", () => {
+  // subjectIsUnique is undefined when no judge ran; the ordinary floor applies.
+  assert.equal(reject({ score: 0.6, passes: true, reason: "" }, { min: 0.5, whenUnique: 0.8 }), null);
+});
+
+test("stock-safe screens competing names before it spends a judge call", () => {
+  const stages = BUILT_IN_PROFILES["stock-safe"].stages;
+  const screened = stages.findIndex((s) => s.filter === "no-other-name");
+  const judged = stages.findIndex((s) => s.score === "judge");
+  assert.ok(screened >= 0 && judged >= 0);
+  assert.ok(screened < judged, "a different named subject must not reach the judge at all");
+  // And it must NOT use the strict adjacency check: stock captions do not name
+  // ancient philosophers, so requiring a match kills the honest generics too.
+  assert.ok(!stages.some((s) => s.score === "title-adjacency"));
+});

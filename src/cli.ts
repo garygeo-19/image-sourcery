@@ -38,6 +38,11 @@ const CAPABILITIES = {
     // 429/503 are waited out; requests to one host are paced.
     "http.retryAfter": true,
     "http.hostPacing": true,
+    // The judge classifies the subject unique / a kind / neither and reports it.
+    "judge.uniqueness": true,
+    // Loosely related is acceptable; a competing named subject is not.
+    "filter.noOtherName": true,
+    "request.subjectType": true,
   },
 };
 

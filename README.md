@@ -140,6 +140,7 @@ imgsrcy find "Sonja Henie" --profile archive-first
 | `archive-first` | named people, artifacts, documents | archives → name check → judge |
 | `verified` | the same, with no model calls at all | archives → name check |
 | `agent` | an agent is calling this | gather → name check → **defer to caller** |
+| `stock-safe` | a named subject whose archives came up empty | stock → drop competing names → judge |
 | `stock` | generic scenes, materials, activities | stock → judge |
 | `compare-all` | maximum recall | everything → one comparative judgement |
 
@@ -165,8 +166,49 @@ cascade: try the precise source, fall through only if nothing was chosen.
 ```
 
 Scorers: `title-adjacency` (deterministic, metadata-only), `judge` (vision), `none`.
-Filters: `min-score`, `passing`, `has-title`, `archive-only`, `no-synthetic`.
+Filters: `min-score`, `passing`, `has-title`, `archive-only`, `no-other-name`, `no-synthetic`.
 Selects: `first`, `best`, `compare`, `defer`.
+
+### Loosely related is acceptable; wrong identity is not
+
+"No name match" is two different things, and collapsing them is what makes a name
+check either useless or crippling:
+
+- the title names **nothing** — a generic colonnade on a Stoa Poikile card.
+  Imprecise, but it asserts nothing false, and it is often the best answer available.
+- the title names **something else** — "Stoa of Attalos, Athens" on that same card.
+  A different building, captioned as such, presented as the subject.
+
+`title-adjacency` is the strict check: confirm the subject or reject. **`no-other-name`**
+is the permissive one: allow anything that names nothing, reject anything that names a
+competitor. Use the first against archives, the second when a named subject has fallen
+through to stock.
+
+### Uniqueness
+
+The judge is asked whether the subject is **unique** — one particular thing, of which
+there is exactly one in the world — or a **kind** of thing, of which any good example
+serves. That is a factual question about the subject rather than an aesthetic one about
+the image, and it is answered far more reliably than relevance, which is the question
+that failed.
+
+The judge reports `subjectIsUnique`; the pipeline decides what to do with it:
+
+```jsonc
+{ "filter": { "filter": "min-score", "min": 0.6, "whenUnique": 0.8 } }
+```
+
+A generic skyscraper on an Empire State Building card is honest but imprecise, so it
+scores mid-range rather than at zero — whether that clears the bar is your call, not the
+library's. A *different named* building is not imprecise, it is false, and scores at the
+floor.
+
+### Declaring the subject
+
+`ImageRequest.subjectType` is optional and never inferred — a library whose value is a
+reproducible provenance trail must not change behaviour on a guess. When you do declare
+`"person"`, two things become hard rules: the `generate` provider refuses outright, and
+the judge is told to reject any image it cannot confirm is that individual.
 
 A profile defined in your config overrides a built-in of the same name, so a preset
 can be tuned without forking. Register your own rules with `registerScorer` /

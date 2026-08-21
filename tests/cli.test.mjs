@@ -41,6 +41,9 @@ test("capabilities reports the safe engine semantics and package version", () =>
         "out.failClosed": true,
         "http.retryAfter": true,
         "http.hostPacing": true,
+        "judge.uniqueness": true,
+        "filter.noOtherName": true,
+        "request.subjectType": true,
       },
     });
   } finally {

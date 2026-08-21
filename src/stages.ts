@@ -211,7 +211,10 @@ export const judgeScorer: Scorer = {
   usesBytes: true,
   async score(c, req, ctx) {
     const v = await ctx.judge.evaluate(c, req, ctx.judgeCtx);
-    return { score: v.score, passes: v.passes, reason: v.reason, confusedWith: v.confusedWith };
+    return {
+      score: v.score, passes: v.passes, reason: v.reason,
+      confusedWith: v.confusedWith, subjectIsUnique: v.subjectIsUnique,
+    };
   },
 };
 
@@ -238,11 +241,25 @@ export interface Filter {
 }
 
 export const FILTERS: Record<string, Filter> = {
+  /**
+   * min-score, with an optional stricter floor for UNIQUE subjects.
+   *
+   * `whenUnique` is how a caller acts on the judge's uniqueness call without the
+   * library deciding policy for them. For a KIND of thing any good example is
+   * correct, so a modest floor is right. For one particular thing — the Empire
+   * State Building, the Rosetta Stone — a merely-similar image is honest but
+   * imprecise, and whether that clears the bar is the caller's call, not ours.
+   */
   "min-score": {
     name: "min-score",
     reject: (c, req, _ctx, options) => {
-      const floor = options?.min ?? req.minScore ?? 0.7;
-      return (c.score ?? 0) >= floor ? null : `scored ${(c.score ?? 0).toFixed(2)} < ${floor}`;
+      const base = options?.min ?? req.minScore ?? 0.7;
+      const floor = c.subjectIsUnique && options?.whenUnique !== undefined
+        ? options.whenUnique
+        : base;
+      if ((c.score ?? 0) >= floor) return null;
+      return `scored ${(c.score ?? 0).toFixed(2)} < ${floor}` +
+        (floor !== base ? " (stricter floor: the subject is unique)" : "");
     },
   },
   passing: {
