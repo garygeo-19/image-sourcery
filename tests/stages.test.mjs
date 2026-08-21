@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  BUILT_IN_PROFILES, JUDGES, REGISTRY, getProfile, listProfiles, run, titleAdjacency,
+  BUILT_IN_PROFILES, FILTERS, JUDGES, REGISTRY, getProfile, listProfiles, run, titleAdjacency,
 } from "../dist/index.js";
 
 const png = Buffer.from("89504e470d0a1a0a", "hex");
@@ -220,4 +220,37 @@ test("a profile runs end to end via run()", async () => {
   }, {});
   assert.equal(result.ok, true);
   assert.equal(result.profile, "custom");
+});
+
+// ── no-other-name ───────────────────────────────────────────────────────────
+// The three-way split. "No name match" is two different things: a title that
+// names NOTHING (generic — imprecise but honest, and often the best answer
+// available) and a title that names something ELSE (a different subject,
+// captioned as such, presented as ours — the falsehood).
+const rejectName = (query, title) =>
+  FILTERS["no-other-name"].reject({ provider: "fixture", title }, { query }, ctx, {});
+
+test("no-other-name rejects a different named subject but allows a generic one", () => {
+  // The real miss: a card about the Stoa Poikile was given the Stoa of Attalos.
+  assert.match(
+    rejectName("Stoa Poikile Athenian Agora", "Stoa of Attalos, Athens") ?? "",
+    /names a different subject/,
+  );
+  assert.match(
+    rejectName("Empire State Building", "the Chrysler Building at dusk") ?? "",
+    /names a different subject/,
+  );
+
+  // Loosely related is acceptable — a generic example names nothing, so nothing
+  // is being asserted falsely. This is what a strict name check wrongly killed.
+  assert.equal(rejectName("Stoa Poikile Athenian Agora", "a ruined colonnade at sunset"), null);
+  assert.equal(rejectName("Empire State Building", "a Manhattan skyscraper at sunset"), null);
+
+  // And the subject itself obviously passes.
+  assert.equal(rejectName("Empire State Building", "Empire State Building from Rockefeller Center"), null);
+});
+
+test("no-other-name cannot convict a candidate that has no title", () => {
+  assert.equal(rejectName("Empire State Building", undefined), null);
+  assert.equal(rejectName("Empire State Building", ""), null);
 });

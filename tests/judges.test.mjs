@@ -104,3 +104,62 @@ test("select still returns the index the judge chose", async () => {
   assert.equal(verdict.index, 1);
   assert.equal(verdict.verdict.passes, true);
 });
+
+// ── uniqueness ──────────────────────────────────────────────────────────────
+// Relevance is the question that failed — every wrong-subject pick scored well
+// on it. "Is there exactly one of these in the world?" is a factual question
+// about the subject rather than an aesthetic one about the image.
+test("the judge is asked whether the subject is unique, and reports it", async () => {
+  let verdict;
+  const sent = await captureJudgeRequest(
+    { score: 0.4, isCorrect: false, subjectIsUnique: true, reason: "a different skyscraper" },
+    async () => {
+      verdict = await JUDGES.openai.evaluate(
+        candidate("pexels", "a Manhattan skyscraper at sunset"),
+        { query: "Empire State Building" },
+        ctx(),
+      );
+    },
+  );
+  const text = promptText(sent);
+  assert.match(text, /UNIQUE/);
+  assert.match(text, /Chrysler Building is not the Empire State Building/);
+  assert.match(text, /subjectIsUnique/);
+  // Reported, not acted on — the pipeline's floor decides what is good enough.
+  assert.equal(verdict.subjectIsUnique, true);
+  assert.equal(verdict.passes, false);
+});
+
+// A declared person is the one hard line: a photograph of someone else, however
+// apt, is a lie the viewer has no way to catch.
+test("a declared person is called out to the judge explicitly", async () => {
+  const sent = await captureJudgeRequest(
+    { score: 0.1, isCorrect: false, subjectIsUnique: true, reason: "not her" },
+    () => JUDGES.openai.evaluate(
+      candidate("pexels", "a female figure skater practising indoors"),
+      { query: "Sonja Henie", subjectType: "person" },
+      ctx(),
+    ),
+  );
+  assert.match(promptText(sent), /DECLARED this subject a specific real person/);
+});
+
+test("a subject with no declared type gets no person-specific instruction", async () => {
+  const sent = await captureJudgeRequest(
+    { score: 0.9, isCorrect: true, subjectIsUnique: false, reason: "fine" },
+    () => JUDGES.openai.evaluate(candidate("pexels", "a rowing boat"), { query: "a rowing boat" }, ctx()),
+  );
+  assert.doesNotMatch(promptText(sent), /DECLARED this subject/);
+});
+
+test("the comparative path carries the same rubric", async () => {
+  const sent = await captureJudgeRequest(
+    { index: 0, score: 0.9, subjectIsUnique: true, reason: "ok" },
+    () => JUDGES.openai.select(
+      [candidate("wikipedia", "Empire State Building, 1932")],
+      { query: "Empire State Building" },
+      ctx(),
+    ),
+  );
+  assert.match(promptText(sent), /UNIQUE/);
+});

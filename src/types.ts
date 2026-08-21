@@ -88,6 +88,13 @@ export interface Verdict {
   passes: boolean;
   reason: string;
   confusedWith?: string;
+  /**
+   * Did the judge consider the requested subject a UNIQUE real entity — exactly
+   * one of it in the world — rather than a kind of thing? Reported, not acted on:
+   * it lets a caller apply a stricter floor to the cases where a near-miss is a
+   * falsehood instead of an imprecision.
+   */
+  subjectIsUnique?: boolean;
 }
 
 export interface Judge {

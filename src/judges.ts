@@ -12,6 +12,31 @@ export const none: Judge = {
   },
 };
 
+/**
+ * Ask about UNIQUENESS before asking about relevance.
+ *
+ * Relevance is the question that failed: every wrong-subject pick in the field
+ * report scored well on it. "Is there exactly one of these in the world?" is a
+ * different kind of question — a factual one about the subject, not an aesthetic
+ * one about the image — and models answer it far more reliably.
+ *
+ * The judge REPORTS; the pipeline DECIDES. A generic example standing in for a
+ * unique subject is honest-but-imprecise, so it scores in the middle rather than
+ * at zero, and a profile's min-score decides whether that is good enough. A
+ * DIFFERENT named subject is not imprecise, it is false, and scores at the floor.
+ */
+const UNIQUENESS_RUBRIC =
+  ` First decide whether the requested subject is UNIQUE — one particular person, place, building,` +
+  ` document or artifact, of which there is exactly one in the world — or a KIND of thing, of which` +
+  ` any good example serves, or NEITHER (a theme, a claim, an abstraction).` +
+  ` If UNIQUE: an image of that very one is correct. An image of a DIFFERENT specific thing of the` +
+  ` same kind is wrong, however similar — the Chrysler Building is not the Empire State Building —` +
+  ` and scores at the floor. An image that is merely a generic example of the kind, naming nothing,` +
+  ` is honest but imprecise: score it around 0.5 and set isCorrect false.` +
+  ` If a KIND: any clear example is correct.` +
+  ` If NEITHER: there is no identity to get wrong; judge only whether the image honestly illustrates` +
+  ` the idea.`;
+
 // ── openai — vision judge (key: OPENAI_API_KEY) ───────────────────────────────
 export const openai: Judge = {
   name: "openai",
@@ -29,13 +54,18 @@ export const openai: Judge = {
       (candidate.meta?.description ? `; described as: "${candidate.meta.description}"` : "") + ".";
     const instruction =
       `Requested subject: "${req.query}".` + provenance +
+      UNIQUENESS_RUBRIC +
       ` Weigh the record title as evidence of IDENTITY: an archive title names its subject, whereas a` +
       ` stock caption merely describes a scene, so a single shared word there is coincidence, not a match.` +
-      ` If the subject is a named individual and the title does not name that individual, say so.` +
+      (req.subjectType === "person"
+        ? ` The caller has DECLARED this subject a specific real person. Treat it as unique, and reject any` +
+          ` image you cannot confirm is that individual — a photograph of someone else, however apt, is a lie` +
+          ` the viewer has no way to catch.`
+        : "") +
       (req.mustShow ? ` It must show: ${req.mustShow}.` : "") +
       (req.mustNotConfuse ? ` It must NOT be confused with: ${req.mustNotConfuse}.` : "") +
-      ` Judge how well the image depicts the requested subject. Be strict about species/identity.` +
-      ` Respond with JSON: {"score":0..1,"isCorrect":boolean,"reason":"short","confusedWith":"if mismatched, what it actually shows"}.`;
+      ` Respond with JSON: {"score":0..1,"isCorrect":boolean,"subjectIsUnique":boolean,` +
+      `"reason":"short","confusedWith":"if mismatched, what it actually shows"}.`;
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
@@ -61,6 +91,7 @@ export const openai: Judge = {
       passes: (j.isCorrect ?? score >= minScore) && score >= minScore,
       reason: j.reason ?? "",
       confusedWith: j.confusedWith,
+      subjectIsUnique: typeof j.subjectIsUnique === "boolean" ? j.subjectIsUnique : undefined,
     };
   },
   // Comparative: one vision call sees the whole pool and picks the best.
@@ -93,8 +124,10 @@ export const openai: Judge = {
       ` subject, whereas a stock caption merely describes a scene, so a single shared word there is` +
       ` coincidence rather than a match. Where the subject is a named individual and no title names that` +
       ` individual, prefer index -1 over a candidate that merely looks appealing.` +
-      ` Pick the ONE index that best and correctly depicts the requested subject; be strict about identity/species.` +
-      ` Respond with JSON: {"index":int,"score":0..1,"reason":"short"}. If none are acceptable, use index -1.`;
+      UNIQUENESS_RUBRIC +
+      ` Pick the ONE index that best and correctly depicts the requested subject.` +
+      ` Respond with JSON: {"index":int,"score":0..1,"subjectIsUnique":boolean,"reason":"short"}.` +
+      ` If none are acceptable, use index -1.`;
     const content: any[] = [{ type: "text", text: instruction }];
     for (const x of valid) {
       const c = pool[x.i];
@@ -121,7 +154,13 @@ export const openai: Judge = {
     const j = JSON.parse(data.choices[0].message.content);
     const index = typeof j.index === "number" ? j.index : -1;
     const score = typeof j.score === "number" ? j.score : 0;
-    return { index, verdict: { score, passes: index >= 0 && score >= minScore, reason: j.reason ?? "" } };
+    return {
+      index,
+      verdict: {
+        score, passes: index >= 0 && score >= minScore, reason: j.reason ?? "",
+        subjectIsUnique: typeof j.subjectIsUnique === "boolean" ? j.subjectIsUnique : undefined,
+      },
+    };
   },
 };
 

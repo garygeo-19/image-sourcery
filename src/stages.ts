@@ -67,7 +67,13 @@ export function tokens(s: string): Set<string> {
  */
 export function namedRun(term: string): string | null {
   const connective = /^(?:of|the|de|van|von|da|di)$/i;
-  const words = String(term ?? "").trim().split(/\s+/);
+  // Strip surrounding punctuation before the capital test. Applied to a search
+  // TERM this rarely matters, but this also runs over candidate TITLES, where
+  // commas are the norm — "Stoa of Attalos, Athens" ends its capitalised run at
+  // `Attalos,` and reports no name at all, so a competing subject goes undetected.
+  const words = String(term ?? "").trim().split(/\s+/)
+    .map((w) => w.replace(/^[^\w'’-]+|[^\w'’-]+$/g, ""))
+    .filter(Boolean);
   let best: string[] = [], cur: string[] = [];
   for (const w of words) {
     if (/^[A-Z][\w'’-]*$/.test(w) || (cur.length && connective.test(w))) cur.push(w);
@@ -251,6 +257,39 @@ export const FILTERS: Record<string, Filter> = {
     name: "archive-only",
     reject: (c, _req, ctx) =>
       ctx.corpusOf(c.provider) === "archive" ? null : `${c.provider} is not an archive`,
+  },
+  /**
+   * no-other-name — loosely related is acceptable; wrong identity is not.
+   *
+   * The three-way split that a plain name check misses. "No name match" is two
+   * different things:
+   *   · the title names NOTHING specific — a generic colonnade on a Stoa Poikile
+   *     card. Imprecise but honest, and often the best available answer.
+   *   · the title names something ELSE specific — "Stoa of Attalos, Athens" on
+   *     that same card. A different building, captioned as such, presented as the
+   *     subject. That is the falsehood.
+   *
+   * Requiring the caption to MATCH the name is the obvious rule and it is wrong:
+   * stock libraries do not caption ancient philosophers, so it rejects the honest
+   * generic images too and coverage collapses.
+   *
+   * So the test is on the CANDIDATE's title alone — does it name a subject of its
+   * own, and is that subject not ours? A title that names nothing goes through.
+   */
+  "no-other-name": {
+    name: "no-other-name",
+    reject: (c, req) => {
+      const title = String(c.title ?? "").trim();
+      if (!title) return null;                       // nothing to convict it with
+      const theirs = namedRun(title);
+      if (!theirs) return null;                      // names nothing — generic, allow
+      const theirParts = significantParts(theirs);
+      if (!theirParts.length) return null;
+      const ours = new Set(significantParts(namedRun(req.query ?? "") ?? req.query ?? ""));
+      return theirParts.every((w) => ours.has(w))
+        ? null
+        : `title names a different subject ("${theirs}")`;
+    },
   },
   "no-synthetic": {
     name: "no-synthetic",
