@@ -7,6 +7,21 @@
 
 export type ProviderKind = "search" | "generate" | "diagram";
 
+/**
+ * What KIND OF CORPUS a provider draws from. This is a different axis from
+ * ProviderKind (what the provider *does*) and it changes how much a record's
+ * title is worth as evidence:
+ *
+ *  - "archive"   a catalogue whose records NAME their subject ("Herb Brooks 1983").
+ *                A one-word subject can be confirmed against one of these.
+ *  - "stock"     a photo library whose captions DESCRIBE a scene ("a stylist
+ *                curling blonde hair"). A single shared word is coincidence, so a
+ *                one-word subject can never be confirmed here.
+ *  - "aggregate" mixed provenance — some records name their subject, some do not.
+ *  - "synthetic" generated. Nothing was photographed, so no title is evidence.
+ */
+export type ProviderCorpus = "archive" | "stock" | "aggregate" | "synthetic";
+
 export interface ImageRequest {
   /** What the image should depict, e.g. "Yarrow's spiny lizard". */
   query: string;
@@ -18,6 +33,18 @@ export interface ImageRequest {
   minScore?: number;
   /** How many candidates to consider per provider. */
   count?: number;
+  /**
+   * What KIND of thing the subject is, when the caller knows. The caller almost
+   * always knows more than this library can infer from a query string, so this is
+   * declared, never guessed — a library whose value is a reproducible provenance
+   * trail must not change behaviour based on a heuristic.
+   *
+   * "person" is load-bearing: it forbids generation. A generated portrait
+   * presented as a real individual is a fabricated likeness — the same falsehood
+   * as attaching the wrong photograph, but synthetic and much harder for anyone
+   * downstream to catch.
+   */
+  subjectType?: "person" | "place" | "artifact" | "artwork" | "scene" | "concept";
 }
 
 export interface Candidate {
@@ -31,6 +58,9 @@ export interface Candidate {
   attribution?: string;
   /** Link back to the source record/page, for provenance. */
   sourceUrl?: string;
+  /** The provider's OWN id for this image. Once a file is copied elsewhere and
+   *  its URL dropped, the link cannot be reconstructed without this. */
+  providerId?: string;
   meta?: Record<string, unknown>;
 }
 
@@ -44,6 +74,9 @@ export interface Ctx {
 export interface Provider {
   name: string;
   kind: ProviderKind;
+  /** Which corpus this draws from. Defaults to "aggregate" — the cautious
+   *  reading — when a provider does not say. */
+  corpus?: ProviderCorpus;
   /** Is this provider usable for THIS user right now? Returns true, or a
    *  human-readable reason it's skipped (e.g. "set UNSPLASH_ACCESS_KEY"). */
   configured(ctx: Ctx): true | string;
@@ -77,6 +110,43 @@ export interface Judge {
   ): Promise<{ index: number; verdict: Verdict }>;
 }
 
+/** A candidate plus the verdict a scorer reached about it. */
+export interface Scored {
+  score: number;
+  passes: boolean;
+  reason: string;
+  confusedWith?: string;
+}
+
+export type FilterSpec = string | { filter: string; [option: string]: any };
+
+/**
+ * How the surviving candidates become an answer.
+ *  - "first"   the first that passes, in rank order — cheapest
+ *  - "best"    the highest scorer across the whole set
+ *  - "compare" one relative look at the pool via the judge's `select`
+ *  - "defer"   DO NOT decide. Return the scored pool so the CALLER judges —
+ *              this is the agent-in-the-loop path: an agent invoking this
+ *              library already holds the surrounding context and can read the
+ *              images, so it is better informed than any judge inside here.
+ */
+export type SelectMode = "first" | "best" | "compare" | "defer";
+
+/** One link in a staged pipeline. See src/stages.ts. */
+export type Stage =
+  | { gather: PipelineEntry[]; [option: string]: any }
+  | { score: string | { scorer: string; [option: string]: any } }
+  | { filter: FilterSpec | FilterSpec[] }
+  | { select: SelectMode };
+
+/** A named, savable sourcing strategy. */
+export interface Profile {
+  name: string;
+  description?: string;
+  judge?: JudgeConfig;
+  stages: Stage[];
+}
+
 export interface PipelineEntry {
   provider: string;
   [option: string]: any;
@@ -105,6 +175,13 @@ export interface JudgeConfig {
 }
 export interface Config {
   judge: JudgeConfig;
+  /** Name of a built-in or config-defined profile to run. */
+  profile?: string;
+  /** Extra profiles, saved alongside your config. These override built-ins of
+   *  the same name, so a preset can be tuned without forking the library. */
+  profiles?: Record<string, Omit<Profile, "name"> & { name?: string }>;
+  /** An explicit staged pipeline. Takes precedence over `profile`. */
+  stages?: Stage[];
   /**
    * Ranked list of STAGES, tried in order. A stage is either one provider
    * (sequential) or a `{ parallel: [...] }` group (gathered concurrently and
@@ -127,6 +204,7 @@ export interface Attempt {
   score?: number;
   passes?: boolean;
   reason: string;
+  confusedWith?: string;
 }
 export interface RunResult {
   ok: boolean;
@@ -134,4 +212,9 @@ export interface RunResult {
   verdict?: Verdict;
   bytes?: Buffer;
   attempts: Attempt[];
+  /** Set when the pipeline ended in `select: "defer"`: the scored pool, handed
+   *  back for the caller to judge. `ok` is false because nothing was chosen. */
+  pool?: (Candidate & Scored)[];
+  /** Which profile ran, when one was named. */
+  profile?: string;
 }

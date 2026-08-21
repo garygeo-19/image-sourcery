@@ -1,6 +1,6 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import * as readline from "node:readline";
-import type { Judge } from "./types.js";
+import type { Candidate, Judge } from "./types.js";
 import { toDataUrl, download } from "./util.js";
 
 // ── none — accept the first candidate (pure ranked fallback, no judging) ──────
@@ -23,8 +23,15 @@ export const openai: Judge = {
     const key = ctx.env[ctx.options.apiKeyEnv ?? "OPENAI_API_KEY"]!;
     const dataUrl = await toDataUrl(candidate);
     const minScore = req.minScore ?? ctx.options.minScore ?? 0.7;
+    const provenance =
+      `\nCandidate metadata — source: ${candidate.provider}` +
+      (candidate.title ? `; record title: "${candidate.title}"` : "; record title: (none supplied)") +
+      (candidate.meta?.description ? `; described as: "${candidate.meta.description}"` : "") + ".";
     const instruction =
-      `Requested subject: "${req.query}".` +
+      `Requested subject: "${req.query}".` + provenance +
+      ` Weigh the record title as evidence of IDENTITY: an archive title names its subject, whereas a` +
+      ` stock caption merely describes a scene, so a single shared word there is coincidence, not a match.` +
+      ` If the subject is a named individual and the title does not name that individual, say so.` +
       (req.mustShow ? ` It must show: ${req.mustShow}.` : "") +
       (req.mustNotConfuse ? ` It must NOT be confused with: ${req.mustNotConfuse}.` : "") +
       ` Judge how well the image depicts the requested subject. Be strict about species/identity.` +
@@ -60,7 +67,20 @@ export const openai: Judge = {
   async select(candidates, req, ctx) {
     const key = ctx.env[ctx.options.apiKeyEnv ?? "OPENAI_API_KEY"]!;
     const minScore = req.minScore ?? ctx.options.minScore ?? 0.7;
-    const pool = candidates.slice(0, ctx.options.poolMax ?? 8);
+    const cap = ctx.options.poolMax ?? 8;
+    const byProvider = new Map<string, Candidate[]>();
+    for (const c of candidates) {
+      if (!byProvider.has(c.provider)) byProvider.set(c.provider, []);
+      byProvider.get(c.provider)!.push(c);
+    }
+    const pool: Candidate[] = [];
+    for (let round = 0; pool.length < cap; round++) {
+      let added = false;
+      for (const list of byProvider.values()) {
+        if (round < list.length && pool.length < cap) { pool.push(list[round]); added = true; }
+      }
+      if (!added) break;
+    }
     const urls = await Promise.all(pool.map((c) => toDataUrl(c).catch(() => null)));
     const valid = pool.map((c, i) => ({ i, url: urls[i] })).filter((x) => x.url) as { i: number; url: string }[];
     if (!valid.length) return { index: -1, verdict: { score: 0, passes: false, reason: "no loadable candidates" } };
@@ -68,12 +88,19 @@ export const openai: Judge = {
       `Requested subject: "${req.query}".` +
       (req.mustShow ? ` It must show: ${req.mustShow}.` : "") +
       (req.mustNotConfuse ? ` It must NOT be confused with: ${req.mustNotConfuse}.` : "") +
-      ` You are shown ${valid.length} candidate images, each preceded by its label "Image N".` +
+      ` You are shown ${valid.length} candidate images, each preceded by the record metadata its` +
+      ` provider supplied. Weigh the record title as evidence of IDENTITY: an archive title names its` +
+      ` subject, whereas a stock caption merely describes a scene, so a single shared word there is` +
+      ` coincidence rather than a match. Where the subject is a named individual and no title names that` +
+      ` individual, prefer index -1 over a candidate that merely looks appealing.` +
       ` Pick the ONE index that best and correctly depicts the requested subject; be strict about identity/species.` +
       ` Respond with JSON: {"index":int,"score":0..1,"reason":"short"}. If none are acceptable, use index -1.`;
     const content: any[] = [{ type: "text", text: instruction }];
     for (const x of valid) {
-      content.push({ type: "text", text: `Image ${x.i}:` });
+      const c = pool[x.i];
+      content.push({ type: "text", text:
+        `Image ${x.i} — source: ${c.provider}; title: ${c.title ? `"${c.title}"` : "(none supplied)"}` +
+        `${c.meta?.description ? `; described as: "${c.meta.description}"` : ""}` });
       content.push({ type: "image_url", image_url: { url: x.url } });
     }
     const res = await fetch("https://api.openai.com/v1/chat/completions", {

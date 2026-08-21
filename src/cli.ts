@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
 import { loadEnv, download } from "./util.js";
 import { loadConfig } from "./config.js";
@@ -7,7 +7,39 @@ import { run, gatherPool } from "./engine.js";
 import type { PipelineEntry } from "./types.js";
 import { REGISTRY, getProvider } from "./providers.js";
 import { JUDGES } from "./judges.js";
+import { listProfiles, getProfile } from "./profiles.js";
+import { SCORERS, FILTERS } from "./stages.js";
 import type { Config, Ctx } from "./types.js";
+
+const packageMetadata = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+) as { name: string; version: string };
+
+const CAPABILITIES = {
+  schemaVersion: 1,
+  name: packageMetadata.name,
+  version: packageMetadata.version,
+  capabilities: {
+    "best.absoluteEvaluate": true,
+    "attempts.confusedWith": true,
+    "doctor.parallelStages": true,
+    "bytes.judgeSaveBound": true,
+    "attempts.providerFailures": true,
+    // Staged pipelines: profiles, typed stages, and the deferred (agent) path.
+    "pipeline.stages": true,
+    "pipeline.profiles": true,
+    "select.defer": true,
+    "scorer.titleAdjacency": true,
+    "provider.corpus": true,
+    // A declared person is refused by the generator, not merely scored down.
+    "generate.refusesPerson": true,
+    // A rejected candidate leaves a sidecar but no image at --out.
+    "out.failClosed": true,
+    // 429/503 are waited out; requests to one host are paced.
+    "http.retryAfter": true,
+    "http.hostPacing": true,
+  },
+};
 
 function parseFlags(args: string[]): { _: string[]; flags: Record<string, string> } {
   const _: string[] = [];
@@ -28,17 +60,21 @@ const HELP = `image-sourcery (imgsrcy) — ranked image sourcing, with a judge
 Usage:
   imgsrcy find "<subject>" [--out file] [options]
   imgsrcy gather "<subject>" [--out dir] [options]   fan out, save the whole pool
+  imgsrcy profiles                                list saved + built-in profiles
   imgsrcy doctor [--config file]
+  imgsrcy capabilities                            machine-readable compatibility report
   imgsrcy providers
 
 Options for find:
   --out <path>            save the chosen image here
+  --profile <name>        run a named profile (see 'imgsrcy profiles')
   --providers a,b,c       override the ranked pipeline (e.g. wikimedia,inaturalist,generate)
   --judge none|openai|human   override the judge
   --best                  judge ALL candidates and keep the highest scorer
   --parallel              gather the whole pipeline AT ONCE (pool) and pick the best
                           comparatively — fan-out instead of sequential cascade
   --min <0..1>            minimum judge score to accept
+  --write-on-fail         also save the best REJECTED candidate (default: sidecar only)
 
 'gather' fans out all providers in parallel, downloads every candidate to a dir
 (default /tmp/imgsrcy/pool) + writes pool.json, and exits — for human/agent
@@ -54,10 +90,29 @@ The tool ships no keys. Run 'imgsrcy doctor' to see what you're set up for.`;
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const { _, flags } = parseFlags(rest);
+
+  if (cmd === "capabilities") {
+    console.log(JSON.stringify(CAPABILITIES, null, 2));
+    return;
+  }
+
   const env = loadEnv();
   const config: Config = loadConfig(flags.config);
 
   if (!cmd || cmd === "help" || flags.help) { console.log(HELP); return; }
+
+  if (cmd === "profiles") {
+    for (const p of listProfiles(config.profiles)) {
+      const custom = config.profiles?.[p.name] ? " (from your config)" : "";
+      console.log(`\n  ${p.name}${custom}`);
+      if (p.description) console.log(`    ${p.description}`);
+      console.log(`    ${p.stages.map((st) => Object.keys(st)[0]).join(" → ")}`);
+    }
+    console.log(`\nScorers: ${Object.keys(SCORERS).join(", ")}`);
+    console.log(`Filters: ${Object.keys(FILTERS).join(", ")}`);
+    console.log(`\nRun one:  imgsrcy find "<subject>" --profile <name>`);
+    return;
+  }
 
   if (cmd === "providers") {
     console.log("Providers:");
@@ -73,7 +128,7 @@ async function main() {
     const j = JUDGES[config.judge.provider];
     console.log(`  ${j ? (j.configured(jctx) === true ? "✓ ready" : "✗ " + j.configured(jctx)) : "✗ unknown judge"}`);
     console.log(`Pipeline (ranked):`);
-    for (const entry of config.pipeline) {
+    for (const entry of config.pipeline.flatMap((s: any) => ("parallel" in s ? s.parallel : [s]))) {
       let status = "✗ unknown provider";
       try {
         const p = getProvider(entry.provider);
@@ -91,6 +146,7 @@ async function main() {
     if (!query) { console.error('find needs a subject, e.g. imgsrcy find "saguaro cactus"'); process.exit(1); }
     if (flags.providers) config.pipeline = flags.providers.split(",").map((p) => ({ provider: p.trim() }));
     if (flags.judge) config.judge = { ...config.judge, provider: flags.judge };
+    if (flags.profile) { config.profile = flags.profile; delete config.stages; }
     if (flags.best) config.mode = "best";
     if (flags.parallel) config.mode = "pool";
 
@@ -113,14 +169,25 @@ async function main() {
       sourceUrl: result.candidate?.sourceUrl,
       score: result.verdict?.score,
       reason: result.verdict?.reason,
+      confusedWith: result.verdict?.confusedWith,
+      profile: result.profile,
+      pool: result.pool?.map((c) => ({
+        provider: c.provider, title: c.title, score: c.score, passes: c.passes,
+        reason: c.reason, license: c.license, sourceUrl: c.sourceUrl, url: c.url,
+      })),
       out: flags.out ?? null,
       generatedAt: new Date().toISOString(),
       attempts: result.attempts,
     };
-    if (result.bytes && flags.out) {
+    if (flags.out) {
       mkdirSync(path.dirname(path.resolve(flags.out)), { recursive: true });
-      writeFileSync(flags.out, result.bytes);
-      // sidecar provenance manifest — source, license, attribution, decision trace
+      // The sidecar is the decision trace and is written either way — a failed run
+      // needs a record too. The IMAGE is only written when the run actually passed:
+      // a rejected candidate left at the requested path looks identical to a good
+      // one to anything downstream that checks whether the file exists.
+      if (result.bytes && (result.ok || flags["write-on-fail"])) {
+        writeFileSync(flags.out, result.bytes);
+      }
       writeFileSync(flags.out + ".json", JSON.stringify(provenance, null, 2));
     }
     console.log(JSON.stringify(provenance, null, 2));

@@ -14,6 +14,9 @@ export const DEFAULT_CONFIG: Config = {
 };
 
 export function loadConfig(file?: string): Config {
+  if (file && !existsSync(file)) {
+    throw new Error(`config file does not exist: ${file}`);
+  }
   const candidates = [file, "image-sourcery.config.json"].filter(Boolean) as string[];
   for (const p of candidates) {
     if (existsSync(p)) return JSON.parse(readFileSync(p, "utf8")) as Config;

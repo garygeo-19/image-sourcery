@@ -1,19 +1,91 @@
 {
+  "_comment": "Copy to image-sourcery.config.json. Run 'imgsrcy profiles' to see what ships built in. Add \"profile\": \"archive-first\" (or any name below) to make one the default; --profile overrides it. A profile takes precedence over \"pipeline\".",
   "judge": {
     "provider": "openai",
     "model": "gpt-4o-mini",
     "minScore": 0.7,
+    "poolMax": 8,
     "apiKeyEnv": "OPENAI_API_KEY"
   },
+  "profiles": {
+    "my-pack": {
+      "description": "Archives, name-checked, no model calls. Good for named subjects.",
+      "stages": [
+        {
+          "gather": [
+            {
+              "provider": "wikipedia"
+            },
+            {
+              "provider": "wikidata"
+            },
+            {
+              "provider": "loc"
+            }
+          ]
+        },
+        {
+          "score": "title-adjacency"
+        },
+        {
+          "filter": [
+            {
+              "filter": "min-score",
+              "min": 0.34
+            }
+          ]
+        },
+        {
+          "select": "best"
+        },
+        {
+          "gather": [
+            {
+              "provider": "openverse"
+            }
+          ]
+        },
+        {
+          "score": "title-adjacency"
+        },
+        {
+          "filter": [
+            {
+              "filter": "min-score",
+              "min": 0.34
+            }
+          ]
+        },
+        {
+          "select": "best"
+        }
+      ]
+    }
+  },
+  "_legacy": "The older ranked-cascade form still works and is unchanged:",
   "mode": "first-pass",
   "pipeline": [
-    { "provider": "wikimedia" },
-    { "provider": "loc" },
-    { "parallel": [
-      { "provider": "openverse" },
-      { "provider": "unsplash", "apiKeyEnv": "UNSPLASH_ACCESS_KEY" },
-      { "provider": "pexels", "apiKeyEnv": "PEXELS_API_KEY" }
-    ] },
-    { "provider": "generate", "model": "gpt-image-1", "size": "1024x1024", "quality": "medium", "apiKeyEnv": "OPENAI_API_KEY" }
-  ]
+    {
+      "provider": "wikipedia"
+    },
+    {
+      "provider": "loc"
+    },
+    {
+      "parallel": [
+        {
+          "provider": "openverse"
+        },
+        {
+          "provider": "unsplash",
+          "apiKeyEnv": "UNSPLASH_ACCESS_KEY"
+        },
+        {
+          "provider": "pexels",
+          "apiKeyEnv": "PEXELS_API_KEY"
+        }
+      ]
+    }
+  ],
+  "_tuning": "Env: IMGSRCY_RETRY_BUDGET_MS (default 20000; raise for unattended batch runs), IMGSRCY_HOST_GAP_MS (default 120; minimum gap between requests to one host, 0 disables)."
 }

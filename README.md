@@ -52,7 +52,13 @@ imgsrcy find "Yarrow's spiny lizard" \
 
 # see what you're configured for (no secrets printed)
 imgsrcy doctor
+
+# machine-readable engine compatibility handshake
+imgsrcy capabilities
 ```
+
+The handshake lets wrappers require absolute judging, parallel-doctor support, complete failure and
+confusable attempts, and exact judged-to-saved byte binding before exposing provider credentials.
 
 ## Demo UI
 
@@ -117,6 +123,74 @@ Put keys in your shell env or a local `.env` (gitignored). Nothing is bundled.
 | `generate` | `OPENAI_API_KEY` | anything nothing else has (gpt-image-1) |
 
 Judges: `openai` (vision), `human` (interactive), `none` (accept first).
+
+### Profiles — saved paths
+
+A **profile** is a named sourcing strategy: which sources, in what order, scored how,
+and who decides. Profiles are plain data, so you can list them, copy one into your
+config, edit it, and keep the name.
+
+```bash
+imgsrcy profiles                                   # list built-ins + your own
+imgsrcy find "Sonja Henie" --profile archive-first
+```
+
+| profile | for | shape |
+|---|---|---|
+| `archive-first` | named people, artifacts, documents | archives → name check → judge |
+| `verified` | the same, with no model calls at all | archives → name check |
+| `agent` | an agent is calling this | gather → name check → **defer to caller** |
+| `stock` | generic scenes, materials, activities | stock → judge |
+| `compare-all` | maximum recall | everything → one comparative judgement |
+
+A pipeline is a chain of typed stages over a candidate set — `gather` adds, `score`
+and `filter` transform, `select` may end the run. Several gather/select pairs make a
+cascade: try the precise source, fall through only if nothing was chosen.
+
+```jsonc
+{
+  "judge": { "provider": "none" },
+  "profiles": {
+    "my-pack": {
+      "description": "Archives, name-checked, no LLM.",
+      "stages": [
+        { "gather": [{ "provider": "wikipedia" }, { "provider": "loc" }] },
+        { "score": "title-adjacency" },   // deterministic identity check
+        { "filter": "passing" },
+        { "select": "best" }
+      ]
+    }
+  }
+}
+```
+
+Scorers: `title-adjacency` (deterministic, metadata-only), `judge` (vision), `none`.
+Filters: `min-score`, `passing`, `has-title`, `archive-only`, `no-synthetic`.
+Selects: `first`, `best`, `compare`, `defer`.
+
+A profile defined in your config overrides a built-in of the same name, so a preset
+can be tuned without forking. Register your own rules with `registerScorer` /
+`registerFilter` — the library owns the executor and the generic predicates; rules
+about *your* domain stay yours.
+
+**`select: "defer"`** is the agent-in-the-loop path. Nothing is chosen; the scored
+pool comes back with each candidate's name-check verdict attached, so an agent that
+already holds the surrounding context can decide with the evidence in hand.
+
+`title-adjacency` needs only metadata, so bytes are fetched lazily — candidates are
+downloaded once something actually has to look at the picture, not before.
+
+### Tuning
+
+| variable | default | what it does |
+|---|---|---|
+| `IMGSRCY_RETRY_BUDGET_MS` | `20000` | How long a 429/503 is waited out before giving up. Raise it for unattended batch runs; the modest default keeps an interactive gather from stalling on one throttled source. |
+| `IMGSRCY_HOST_GAP_MS` | `120` | Minimum gap between requests to the **same host**. Different hosts stay parallel. `0` disables. |
+
+Politeness is per-host rather than per-provider on purpose: `wikipedia`, `wikidata` and
+`wikimedia` are three providers over one organisation's infrastructure, and a single
+gather can otherwise fire five downloads at one CDN at once. That burst is self-inflicted,
+and the 429 it earns reads downstream as *"this subject has no photograph."*
 
 ### Modes
 
