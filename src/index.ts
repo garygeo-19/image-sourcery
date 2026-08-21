@@ -8,6 +8,6 @@ export { loadEnv } from "./util.js";
 export { BUILT_IN_PROFILES, getProfile, listProfiles } from "./profiles.js";
 export {
   SCORERS, FILTERS, getScorer, getFilter, registerScorer, registerFilter,
-  titleAdjacency, significantParts, corpusOf, PROPER_NOUN,
+  titleAdjacency, namedRun, significantParts, corpusOf, PROPER_NOUN,
 } from "./stages.js";
 export type { Scorer, Filter, ScorerCtx } from "./stages.js";
